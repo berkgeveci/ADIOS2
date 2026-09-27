@@ -2,6 +2,84 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from .adios2_bindings@ADIOS2_LIBRARY_SUFFIX@ import *
+"""ADIOS2 low-level bindings, with runtime selection of the MPI build.
+
+A wheel may carry several builds of the bindings extension next to this file:
+
+    adios2_bindings@ADIOS2_LIBRARY_SUFFIX@      the build this __init__ was generated with
+    adios2_bindings_mpi_<abi>                   MPI builds, one per MPI ABI
+                                                (mpich, openmpi, mpiabi, impi, msmpi)
+
+The MPI build is used when mpi4py.MPI has been imported before adios2 (that
+is how MPI python programs start), or when ADIOS2_MPI=1 is set in the
+environment; ADIOS2_MPI=0 forces the serial build. The ABI is the one
+mpi4py picked for the MPI library it loaded, so the ADIOS2 MPI libraries
+bind to the same libmpi.
+"""
+
+import importlib
+import os
+import sys
+import warnings
 
 __version__ = "@ADIOS2_VERSION@"
+
+_DEFAULT = "adios2_bindings@ADIOS2_LIBRARY_SUFFIX@"
+
+
+def _mpi_abi():
+    """name of the MPI ABI mpi4py is using, or None if it cannot be told"""
+    try:
+        from mpi4py import _mpiabi
+
+        return _mpiabi._get_mpiabi()
+    except Exception:  # pragma: no cover - older mpi4py
+        pass
+    try:
+        from mpi4py import MPI
+
+        version = MPI.Get_library_version()
+    except Exception:
+        return None
+    if "Open MPI" in version:
+        return "openmpi"
+    if os.name == "nt":
+        return "msmpi" if "Microsoft" in version else "impi"
+    return "mpich"
+
+
+def _select():
+    choice = os.environ.get("ADIOS2_MPI", "").strip().lower()
+    if choice in ("0", "off", "no", "false"):
+        want_mpi, explicit = False, True
+    elif choice in ("1", "on", "yes", "true"):
+        want_mpi, explicit = True, True
+    else:
+        want_mpi, explicit = "mpi4py.MPI" in sys.modules, False
+
+    if want_mpi:
+        abi = _mpi_abi()
+        if abi is None:
+            problem = "could not determine the MPI ABI (is mpi4py installed and importable?)"
+        else:
+            problem = f"the MPI bindings for the {abi} ABI (adios2_bindings_mpi_{abi}) are not installed"
+        try:
+            if abi is None:
+                raise ImportError(problem)
+            return importlib.import_module(f"{__name__}.adios2_bindings_mpi_{abi}")
+        except ImportError as exc:
+            if explicit:
+                raise ImportError(
+                    f"ADIOS2_MPI is set but {problem}; install mpi4py and the adios2-mpi wheel"
+                ) from exc
+            warnings.warn(
+                f"mpi4py is loaded but {problem}; using the serial ADIOS2 build",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+    return importlib.import_module(f"{__name__}.{_DEFAULT}")
+
+
+_module = _select()
+globals().update({k: v for k, v in vars(_module).items() if not k.startswith("_")})
+del _module

@@ -29,10 +29,21 @@ include(GNUInstallDirs)
 
 if (ADIOS2_USE_PIP)
   if (UNIX)
+    # Libraries are bundled beside the python modules, in the adios2 package.
     set(CMAKE_INSTALL_LIBDIR "adios2")
-    set(CMAKE_INSTALL_INCLUDEDIR "adios2/include")
+    # Headers default to adios2/include. A wheel can carry several builds in
+    # the same package (e.g. MPI builds per MPI ABI, see
+    # scripts/wheels/build_macos_wheels.py); those get their own header dir
+    # since the generated ADIOSConfig.h differs between builds.
+    set(ADIOS2_PIP_INCLUDEDIR "adios2/include" CACHE STRING
+      "Header install dir, relative to site-packages, for pip builds")
+    mark_as_advanced(ADIOS2_PIP_INCLUDEDIR)
+    set(CMAKE_INSTALL_INCLUDEDIR "${ADIOS2_PIP_INCLUDEDIR}")
     set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
-    list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN")
+    if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+      # ELF loader settings; macOS gets @loader_path entries below.
+      list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN")
+    endif ()
   elseif(WIN32)
     set(CMAKE_INSTALL_BINDIR "adios2/bindings")
   endif ()
